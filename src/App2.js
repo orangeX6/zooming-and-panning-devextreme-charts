@@ -1,0 +1,169 @@
+import React from 'react';
+import DataSource from 'devextreme/data/data_source';
+
+import {
+  Chart,
+  ZoomAndPan,
+  ScrollBar,
+  ArgumentAxis,
+  ValueAxis,
+  Title,
+  Label,
+  Font,
+  Legend,
+  Series,
+  Animation,
+  LoadingIndicator,
+} from 'devextreme-react/chart';
+
+const wholeRange = {
+  startValue: new Date(2017, 0, 1),
+  endValue: new Date(2017, 11, 31),
+};
+
+class App extends React.Component {
+  constructor(props) {
+    super(props);
+    this.packetsLock = 0;
+    this.HALFDAY = 43200000;
+    this.chartDataSource = new DataSource({
+      store: [],
+      sort: 'date',
+      paginate: false,
+    });
+    this.state = {
+      visualRange: {
+        startValue: new Date(2017, 3, 1),
+        endValue: new Date(2017, 3, 15),
+      },
+    };
+    this.handleChange = this.handleChange.bind(this);
+  }
+
+  render() {
+    return (
+      <Chart
+        id="chart"
+        title="Temperature in Toronto (2017)"
+        dataSource={this.chartDataSource}
+      >
+        <ZoomAndPan argumentAxis="pan" />
+        <ScrollBar visible={true} />
+        <ArgumentAxis
+          argumentType="datetime"
+          visualRangeUpdateMode="keep"
+          visualRange={this.state.visualRange}
+          wholeRange={wholeRange}
+        />
+        <ValueAxis name="temperature" allowDecimals={false}>
+          <Title text={'Temperature, &deg;C'}>
+            <Font color="#ff950c" />
+          </Title>
+          <Label>
+            <Font color="#ff950c" />
+          </Label>
+        </ValueAxis>
+        <Series
+          color="#ff950c"
+          type="rangeArea"
+          argumentField="date"
+          rangeValue1Field="minTemp"
+          rangeValue2Field="maxTemp"
+          name="Temperature range"
+        />
+        <Animation enabled={false} />
+        <LoadingIndicator backgroundColor="none">
+          <Font size={14} />
+        </LoadingIndicator>
+        <Legend visible={false} />
+      </Chart>
+    );
+  }
+
+  handleChange(e) {
+    if (e.fullName === 'argumentAxis.visualRange') {
+      const stateStart = this.state.visualRange.startValue;
+      const currentStart = e.value.startValue;
+      if (stateStart.valueOf() !== currentStart.valueOf()) {
+        this.setState({ visualRange: e.value });
+      }
+      this.onVisualRangeChanged(e.component);
+    }
+  }
+
+  onVisualRangeChanged(component) {
+    const items = component.getDataSource().items();
+    const { visualRange } = this.state;
+    if (
+      !items.length ||
+      items[0].date - visualRange.startValue >= this.HALFDAY ||
+      visualRange.endValue - items[items.length - 1].date >= this.HALFDAY
+    ) {
+      this.uploadDataByVisualRange(visualRange, component);
+    }
+  }
+
+  uploadDataByVisualRange(visualRange, component) {
+    const dataSource = component.getDataSource();
+    const storage = dataSource.items();
+    const ajaxArgs = {
+      startVisible: getDateString(visualRange.startValue),
+      endVisible: getDateString(visualRange.endValue),
+      startBound: getDateString(storage.length ? storage[0].date : null),
+      endBound: getDateString(
+        storage.length ? storage[storage.length - 1].date : null
+      ),
+    };
+
+    if (
+      ajaxArgs.startVisible !== ajaxArgs.startBound &&
+      ajaxArgs.endVisible !== ajaxArgs.endBound &&
+      !this.packetsLock
+    ) {
+      this.packetsLock += 1;
+      component.showLoadingIndicator();
+
+      getDataFrame(ajaxArgs)
+        .then((dataFrame) => {
+          this.packetsLock -= 1;
+
+          const componentStorage = dataSource.store();
+
+          dataFrame
+            .map((i) => ({
+              date: new Date(i.Date),
+              minTemp: i.MinTemp,
+              maxTemp: i.MaxTemp,
+            }))
+            .forEach((item) => componentStorage.insert(item));
+
+          dataSource.reload();
+
+          this.onVisualRangeChanged(component);
+        })
+        .catch(() => {
+          this.packetsLock -= 1;
+          dataSource.reload();
+        });
+    }
+  }
+}
+
+function getDataFrame(args) {
+  let params = '?';
+
+  params += `startVisible=${args.startVisible}
+    &endVisible=${args.endVisible}
+    &startBound=${args.startBound}
+    &endBound=${args.endBound}`;
+
+  return fetch(
+    `https://demo.questdb.io/exec?query=SELECT+pickup_datetime%2C+trip_distance+from+trips%3B&limit=1%2C100`
+  ).then((response) => response.json());
+}
+
+function getDateString(dateTime) {
+  return dateTime ? dateTime.toLocaleDateString('en-US') : '';
+}
+
+export default App;
